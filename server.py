@@ -1,5 +1,28 @@
 import socket
+import threading
 
+    """_summary_
+    This function will allow the server to have multiple clients in one connection
+    and talk to each other.
+    """
+def handle_clients(conn, addr):
+    print(f"Connection from: {addr}")
+
+    try:
+        while True:
+            data = conn.recv(1024)
+            if not data:  # the client's connection is closed
+                break
+            conn.sendall(data) # client's data is received
+    except (ConnectionResetError, BrokenPipeError) as e: # if the client couldn't connect to the server
+        print(f"Connection error with {addr}: {e}")
+    finally:
+        conn.close()
+
+
+    """_summary_
+    The baseline server that allows clients to communicate
+    """
 def server():
     host = '127.0.0.1' # address for local testing
     port = 5000 # creating a port
@@ -14,24 +37,20 @@ def server():
     # Up to 5 connection requests
     server_socket.listen(5)
 
-    conn, address = server_socket.accept() # accept new connections
-    print("Connection from: " + str(address))
+    print(f"Server listening on {host}:{port}")
 
-    while True:
-        raw_data = conn.recv(1024)
+    try:
+        while True:
+            conn, addr = server_socket.accept()
+            # Let the server allow multiple clients
+            thread = threading.Thread(target=handle_clients, args=(conn, addr), daemon=True)
+            thread.start()
+            print(f"Active connections: {threading.active_count() - 1}")
+    except KeyboardInterrupt:
+        print("Server shutting down")
+    finally:
+        server_socket.close() # close the listening socket
 
-        if not raw_data:
-            break
-        try:
-            data = raw_data.decode('utf-8')
-        except UnicodeDecodeError:
-            print(f"Received non-UTF-8 data from {address}, skipping...")
-            continue
 
-        print("from connected user: " + str(data))
-        data = input(' -> ')
-
-        conn.sendall(data.encode()) # send data to the client
-
-    conn.close() # close the server connection
-    server_socket.close() # close the listening socket
+if __name__ == '__main__':
+    server()
