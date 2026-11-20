@@ -1,11 +1,18 @@
 import socket
 import threading
 
-    """_summary_
-    This function will allow the server to have multiple clients in one connection
-    and talk to each other.
-    """
+client_list = []
+lock = threading.Lock()  # separate threads during the connection
+
+"""_summary_
+This function will allow the server to have multiple clients in one connection
+and talk to each other.
+"""
+
 def handle_clients(conn, addr):
+    with lock:  # will release the lock when an exception occurs
+        client_list.append(addr)
+
     print(f"Connection from: {addr}")
 
     try:
@@ -14,9 +21,15 @@ def handle_clients(conn, addr):
             if not data:  # the client's connection is closed
                 break
             conn.sendall(data) # client's data is received
-    except (ConnectionResetError, BrokenPipeError) as e: # if the client couldn't connect to the server
-        print(f"Connection error with {addr}: {e}")
+    except ConnectionResetError:
+        print("Client disconnected unexpectedly")
+    except BrokenPipeError:
+        print("Send failed: client has closed the connection")
+    except socket.timeout:
+        print("Connection timed out")
     finally:
+        with lock:
+            client_list.remove(addr)
         conn.close()
 
 
@@ -34,7 +47,7 @@ def server():
     # Bind host address and port together
     server_socket.bind((host, port))
 
-    # Up to 5 connection requests
+    # The socket is listening for connections
     server_socket.listen(5)
 
     print(f"Server listening on {host}:{port}")
