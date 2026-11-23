@@ -1,7 +1,7 @@
 import socket
 import threading
 
-client_list = []
+client_list = {}
 lock = threading.Lock()  # separate threads during the connection
 
 """_summary_
@@ -10,26 +10,54 @@ and talk to each other.
 """
 
 def handle_clients(conn, addr):
-    with lock:  # will release the lock when an exception occurs
-        client_list.append(addr)
-
-    print(f"Connection from: {addr}")
 
     try:
+        registered = False
+
+        print(f"Connection from: {addr}")
+
+        new_client = conn.recv(1024).decode('utf-8')
+
+        
+        with lock:
+            if new_client in client_list:
+                # tell the client that this username is taken
+                registered = False
+                conn.close()
+                return
+            else:
+                # the client is new; allow them in the server
+                client_list[new_client] = conn
+                registered = True
+                print(client_list)
+
+        # tell the client what the server decided
+        if registered:
+            conn.sendall("REGISTERED".encode('utf-8'))
+        else:
+            conn.sendall("USERNAME_TAKEN".encode('utf-8'))
+
+        # the client is connected; they can communicate
         while True:
             data = conn.recv(1024)
             if not data:  # the client's connection is closed
                 break
+
             conn.sendall(data) # client's data is received
+
     except ConnectionResetError:
         print("Client disconnected unexpectedly")
+
     except BrokenPipeError:
         print("Send failed: client has closed the connection")
+
     except socket.timeout:
         print("Connection timed out")
+
     finally:
-        with lock:
-            client_list.remove(addr)
+        with lock: # only take out the necessary client
+            if client_list.get(new_client) is conn:
+                client_list.pop(new_client, None)
         conn.close()
 
 

@@ -1,12 +1,28 @@
 import socket
 
 def client():
+
     host = '127.0.0.1' # address for local testing
     port = 5000 # server's socket port number
+
+    username = input("Enter a username: ")  # the client will name itself
 
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # IPv4 TCP socket
     client_socket.connect((host, port)) # connect to the server
 
+    client_socket.sendall(username.encode('utf-8'))  # tell the server who the client is
+
+    response = client_socket.recv(1024).decode('utf-8') # the server will tell if the client is registered or not
+
+    if response == "REGISTERED":
+        print(f"Welcome to Class Chat: {username}!") # the client is accepted 
+    else:
+        print("Username already taken.") # the client is rejected; stop the client
+        client_socket.close()
+        return
+
+    # The client can now communicate through the server
+    
     message = input(" -> ") # get input
 
     while message.lower().strip() != 'bye':
