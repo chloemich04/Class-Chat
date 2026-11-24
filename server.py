@@ -1,6 +1,7 @@
 import socket
 import threading
 import json
+from protocol import frame_message, extract_messages
 
 client_list = {}
 lock = threading.Lock()  # separate threads during the connection
@@ -12,14 +13,24 @@ and talk to each other.
 
 def handle_clients(conn, addr):
     new_client = None
+    buffer = b''
     
     try:
         registered = False
 
         print(f"Connection from: {addr}")
 
-        new_client = conn.recv(1024).decode('utf-8')
+        # keeping adding incoming data to the buffer to be framed
+        while b'\n' not in buffer:
+            data = conn.recv(1024)
 
+            if not data:
+                return
+            buffer += data
+
+        # manually get the username from the data
+        username_bytes, buffer = buffer.split(b'\n', 1)
+        new_client = username_bytes.decode('utf-8')
         
         with lock:
             if new_client in client_list:
@@ -31,48 +42,55 @@ def handle_clients(conn, addr):
                 registered = True
                 print(client_list)
 
-        # tell the client what the server decided
+        # tell the client if the server accepted them or not
         if registered:
-            conn.sendall("REGISTERED".encode('utf-8'))
+            conn.sendall(frame_message("REGISTERED"))
         else:
-            conn.sendall("USERNAME_TAKEN".encode('utf-8'))
-            conn.close()
+            conn.sendall(frame_message("USERNAME_TAKEN"))
             return
 
     
         # the client is connected; they can communicate
         while True:
-            data = conn.recv(1024)
-            if not data: # the client's connection is closed
-                break
+            if b'\n' not in buffer:
+                data = conn.recv(1024)
 
-            message_info = json.loads(data.decode('utf-8'))  # get the client's message
+                if not data: # the client's connection is closed
+                    break
 
-            receiver = message_info["receiver"]
-            text = message_info["message"]
+                buffer += data
 
-            message_info["sender"] = new_client
+            # get full messages and send them to the correct recipient
+            messages, buffer = extract_messages(buffer)
+
+            for message in messages:
+                message_info = json.loads(message.decode('utf-8'))  # get the client's message
+
+                receiver = message_info["receiver"]
+                text = message_info["message"]
+
+                message_info["sender"] = new_client
 
 
-            print(f"**{new_client}** sent --{receiver}-- a message of: '{text}'")
+                print(f"**{new_client}** sent --{receiver}-- a message of: '{text}'")
 
-            forward_message = json.dumps(message_info).encode('utf-8')
+                forward_message = frame_message(json.dumps(message_info))
 
-            # get the client that's getting the message
-            with lock:
-                receiver_socket = client_list.get(receiver)
+                # get the client that's getting the message
+                with lock:
+                    receiver_socket = client_list.get(receiver)
 
-            if receiver_socket is not None:
-                try:
-                    receiver_socket.sendall(forward_message) # sending the client's message to their recipient
+                if receiver_socket is not None:
+                    try:
+                        receiver_socket.sendall(forward_message) # sending the client's message to their recipient
 
-                except OSError as e:
-                    print(f"Delivery failed: {e}")
-                    conn.sendall(
-                        f"Failed to deliver message to '{receiver}'.".encode('utf-8')
-                    )
-            else:
-                conn.sendall(f"User '{receiver}' is not connected to the server.".encode('utf-8'))
+                    except OSError as e:
+                        print(f"Delivery failed: {e}")
+                        conn.sendall(
+                            frame_message(f"Failed to deliver message to '{receiver}'.")
+                        )
+                else:
+                    conn.sendall(frame_message(f"User '{receiver}' is not connected to the server."))
 
     except ConnectionResetError:
         print("Client disconnected unexpectedly")

@@ -3,6 +3,7 @@ import json
 import select
 import threading
 import queue
+from protocol import frame_message, extract_messages
 
 def client():
 
@@ -14,9 +15,23 @@ def client():
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # IPv4 TCP socket
     client_socket.connect((host, port)) # connect to the server
 
-    client_socket.sendall(username.encode('utf-8'))  # tell the server who the client is
+    buffer = b''
 
-    response = client_socket.recv(1024).decode('utf-8') # the server will tell if the client is registered or not
+    client_socket.sendall(frame_message(username))  # tell the server who the client is
+
+    while b'\n' not in buffer:
+        data = client_socket.recv(1024) # the server will tell if the client is registered or not
+
+        if not data:
+            print("Server disconnected during registration.")
+            client_socket.close()
+            return
+        
+        buffer += data
+
+    # get the server's decision from the buffer
+    response_bytes, buffer = buffer.split(b'\n', 1)
+    response = response_bytes.decode('utf-8')
 
     if response == "REGISTERED":
         print(f"Welcome to Class Chat: {username}!") # the client is accepted 
@@ -25,7 +40,7 @@ def client():
         client_socket.close()
         return
 
-    # The client can now communicate through the server
+    # The client can now communicate through the server (hooray:))
 
     stop_event = threading.Event()
 
@@ -43,7 +58,7 @@ def client():
     thread.start()
 
     try:
-        receive_messages(client_socket, out_going, read_socket, stop_event)
+        receive_messages(client_socket, out_going, read_socket, stop_event, buffer)
     finally:
         stop_event.set()
         read_socket.close()
@@ -80,7 +95,7 @@ def send_messages(username, out_going, write_socket, stop_event):
         json_info = json.dumps(text_info)
 
         # send the message to the queue
-        out_going.put(json_info.encode('utf-8'))
+        out_going.put(frame_message(json_info))
 
         try:
         # tell the main thread to get the message from the queue
@@ -92,21 +107,28 @@ def send_messages(username, out_going, write_socket, stop_event):
             break 
 
 
-def receive_messages(client_socket,out_going, read_socket, stop_event):
+def receive_messages(client_socket,out_going, read_socket, stop_event, buffer):
     while not stop_event.is_set():
+        timeout = 0 if b'\n' in buffer else 1
         readable, writable, exceptional = select.select(
-            [client_socket,read_socket], [], [], 1
+            [client_socket,read_socket], [], [], timeout
         )
 
         # incoming data; process it
         if client_socket in readable:
-            raw_message = client_socket.recv(1024)
+            data = client_socket.recv(1024) # the server will tell if the client is registered or not
 
-            if not raw_message: # see if the server disconnection
-                stop_event.set()
-                break
+            if not data:
+                print("Server disconnected.")
+                return
+            
+            buffer += data
+
+        messages, buffer = extract_messages(buffer)
+
+        for message in messages:
             try:
-                data = raw_message.decode('utf-8')
+                info = message.decode('utf-8')
             except UnicodeDecodeError:
                 print("Received non-UTF-8 data from the server, skipping...")
                 continue
@@ -114,10 +136,10 @@ def receive_messages(client_socket,out_going, read_socket, stop_event):
             # show the recipient the message the client sent
             # if the server sends something to the client, the name will be 'Server
             try:
-                message_info = json.loads(data)
+                message_info = json.loads(info)
                 print(f"<{message_info["sender"]}>: {message_info["message"]}")
             except json.JSONDecodeError:
-                print(f"<Server>: {data}")
+                print(f"<Server>: {info}")
 
         # incoming notification; process it
         if read_socket in readable:
