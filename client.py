@@ -1,4 +1,5 @@
 import socket
+import json
 
 def client():
 
@@ -22,12 +23,24 @@ def client():
         return
 
     # The client can now communicate through the server
-    
-    message = input(" -> ") # get input
 
-    while message.lower().strip() != 'bye':
+    while True:
         # Send a message
-        client_socket.sendall(message.encode())
+        recipient = input("Who would you like to message: ")  # who are you texting
+            
+        text = input("What do you want to say -> ") # get input
+
+        if text.lower().strip() == 'bye': # if the client types 'bye' they will be disconnected from the server
+            break
+    
+        text_info = {
+            "sender": username,
+            "receiver": recipient,
+            "message": text
+        }
+    
+        json_info = json.dumps(text_info)
+        client_socket.sendall(json_info.encode())
         raw_message = client_socket.recv(1024)
 
         if not raw_message:
@@ -40,8 +53,6 @@ def client():
 
         # Show output in the terminal
         print('Received from server: ' + data)
-
-        message = input(" -> ") # get input again
 
     client_socket.close() # close the connection
 

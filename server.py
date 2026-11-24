@@ -1,5 +1,6 @@
 import socket
 import threading
+import json
 
 client_list = {}
 lock = threading.Lock()  # separate threads during the connection
@@ -10,7 +11,8 @@ and talk to each other.
 """
 
 def handle_clients(conn, addr):
-
+    new_client = None
+    
     try:
         registered = False
 
@@ -23,8 +25,6 @@ def handle_clients(conn, addr):
             if new_client in client_list:
                 # tell the client that this username is taken
                 registered = False
-                conn.close()
-                return
             else:
                 # the client is new; allow them in the server
                 client_list[new_client] = conn
@@ -36,14 +36,43 @@ def handle_clients(conn, addr):
             conn.sendall("REGISTERED".encode('utf-8'))
         else:
             conn.sendall("USERNAME_TAKEN".encode('utf-8'))
+            conn.close()
+            return
 
+    
         # the client is connected; they can communicate
         while True:
             data = conn.recv(1024)
-            if not data:  # the client's connection is closed
+            if not data: # the client's connection is closed
                 break
 
-            conn.sendall(data) # client's data is received
+            message_info = json.loads(data.decode('utf-8'))  # get the client's message
+
+            receiver = message_info["receiver"]
+            text = message_info["message"]
+
+            message_info["sender"] = new_client
+
+
+            print(f"**{new_client}** sent --{receiver}-- a message of: '{text}'")
+
+            forward_message = json.dumps(message_info).encode('utf-8')
+
+            # get the client that's getting the message
+            with lock:
+                receiver_socket = client_list.get(receiver)
+
+            if receiver_socket is not None:
+                try:
+                    receiver_socket.sendall(forward_message) # sending the client's message to their recipient
+
+                except OSError as e:
+                    print(f"Delivery failed: {e}")
+                    conn.sendall(
+                        f"Failed to deliver message to '{receiver}'.".encode('utf-8')
+                    )
+            else:
+                conn.sendall(f"User '{receiver}' is not connected to the server.".encode('utf-8'))
 
     except ConnectionResetError:
         print("Client disconnected unexpectedly")
@@ -61,9 +90,7 @@ def handle_clients(conn, addr):
         conn.close()
 
 
-    """_summary_
-    The baseline server that allows clients to communicate
-    """
+
 def server():
     host = '127.0.0.1' # address for local testing
     port = 5000 # creating a port
