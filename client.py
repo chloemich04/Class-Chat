@@ -28,7 +28,20 @@ def client():
 
     stop_event = threading.Event()
 
-    client_socket.close()
+    # let the clients send messages to their recipient
+    thread = threading.Thread(
+        target=send_messages,
+        args=(client_socket, username, stop_event),
+        daemon=True
+    )
+
+    thread.start()
+
+    try:
+        receive_messages(client_socket, stop_event)
+    finally:
+        stop_event.set()
+        client_socket.close()
 
 
 def send_messages(client_socket, username, stop_event):
@@ -37,6 +50,9 @@ def send_messages(client_socket, username, stop_event):
         recipient = input("Who would you like to message: ")  # who are you texting
             
         text = input("What do you want to say -> ") # get input
+
+        if stop_event.is_set(): # if the client is disconnected, don't let the message go through
+            break
 
         if text.lower().strip() == 'bye': # if the client types 'bye' they will be disconnected from the server
             stop_event.set()
@@ -49,7 +65,14 @@ def send_messages(client_socket, username, stop_event):
         }
     
         json_info = json.dumps(text_info)
-        client_socket.sendall(json_info.encode())
+
+        # send the message but if it doesn't get sent (server disconnected), stop the operation
+        try:
+            client_socket.sendall(json_info.encode('utf-8'))
+        except OSError as e:
+            print(f"Send failed: {e}")
+            stop_event.set()
+            break
 
 def receive_messages(client_socket,stop_event):
     while not stop_event.is_set():
@@ -72,8 +95,13 @@ def receive_messages(client_socket,stop_event):
             print("Received non-UTF-8 data from the server, skipping...")
             continue
 
-        # Show output in the terminal
-        print('Received from server: ' + data)
+        # show the recipient the message the client sent
+        # if the server sends something to the client, the name will be 'Server
+        try:
+            message_info = json.loads(data)
+            print(f"<{message_info["sender"]}>: {message_info["message"]}")
+        except json.JSONDecodeError:
+            print(f"<Server>: {data}")
 
 if __name__ == '__main__':
     client()
