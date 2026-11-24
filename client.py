@@ -1,5 +1,7 @@
 import socket
 import json
+import select
+import threading
 
 def client():
 
@@ -24,13 +26,20 @@ def client():
 
     # The client can now communicate through the server
 
-    while True:
+    stop_event = threading.Event()
+
+    client_socket.close()
+
+
+def send_messages(client_socket, username, stop_event):
+    while not stop_event.is_set():
         # Send a message
         recipient = input("Who would you like to message: ")  # who are you texting
             
         text = input("What do you want to say -> ") # get input
 
         if text.lower().strip() == 'bye': # if the client types 'bye' they will be disconnected from the server
+            stop_event.set()
             break
     
         text_info = {
@@ -41,9 +50,21 @@ def client():
     
         json_info = json.dumps(text_info)
         client_socket.sendall(json_info.encode())
+
+def receive_messages(client_socket,stop_event):
+    while not stop_event.is_set():
+        readable, writable, exceptional = select.select(
+            [client_socket],[],[], 1
+        )
+
+        # no incoming data; check again
+        if client_socket not in readable:
+            continue
+        
         raw_message = client_socket.recv(1024)
 
-        if not raw_message:
+        if not raw_message: # see if the server disconnection
+            stop_event.set()
             break
         try:
             data = raw_message.decode('utf-8')
@@ -53,9 +74,6 @@ def client():
 
         # Show output in the terminal
         print('Received from server: ' + data)
-
-    client_socket.close() # close the connection
-
 
 if __name__ == '__main__':
     client()
