@@ -72,8 +72,46 @@ def handle_clients(conn, addr):
             messages, buffer = extract_messages(buffer)
 
             for message in messages:
-                message_info = json.loads(message.decode('utf-8'))  # get the client's message
+                try:
+                    message_info = json.loads(message.decode('utf-8'))  # get the client's message
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    with send_lock:
+                        conn.sendall(frame_message("Invalid message format."))
+                        continue
+                
+                # check to make sure the requested message from the client is an acceptable request
+                if not isinstance(message_info, dict):
+                    with send_lock:
+                        conn.sendall(frame_message("Message must be a JSON object."))
+                        continue
 
+                if "receiver" not in message_info or "message" not in message_info:
+                    with send_lock:
+                        conn.sendall(frame_message("Receiver and message fields are required."))
+                        continue
+
+                if not isinstance(message_info["receiver"], str):   
+                    with send_lock:
+                        conn.sendall(frame_message("Receiver must be a string."))
+                        continue
+
+                if not isinstance(message_info["message"], str):
+                    with send_lock:
+                        conn.sendall(frame_message("Message must be a string."))
+                        continue
+
+                if not message_info["receiver"].strip():
+                    with send_lock:
+                        conn.sendall(frame_message("Must provide a recipient."))
+                    continue
+
+                if not message_info["message"].strip():
+                    with send_lock:
+                        conn.sendall(frame_message("Must type a message."))
+                    continue
+
+
+                # client message request passed; send the message to the recipient
                 receiver = message_info["receiver"]
                 text = message_info["message"]
 
@@ -112,6 +150,12 @@ def handle_clients(conn, addr):
 
     except socket.timeout:
         print("Connection timed out")
+
+    except OSError as e:
+        print(f"Unexpected socket error: {e}")
+
+    except UnicodeDecodeError:
+        print("Invalid UTF-8 data received during registration.")
 
     finally:
         with lock: # only take out the necessary client
