@@ -180,15 +180,27 @@ def server():
     # The socket is listening for connections
     server_socket.listen(5)
 
+    server_socket.settimeout(1.0)
+
     print(f"Server listening on {host}:{port}")
 
     try:
         while True:
-            conn, addr = server_socket.accept()
+            try:
+                conn, addr = server_socket.accept()
+            except socket.timeout:
+                continue
+
             # Let the server allow multiple clients
-            thread = threading.Thread(target=handle_clients, args=(conn, addr), daemon=True)
+            thread = threading.Thread(
+                target=handle_clients,
+                args=(conn, addr),
+                daemon=True
+            )
+
             thread.start()
             print(f"Active connections: {threading.active_count() - 1}")
+            
     except KeyboardInterrupt:
         print("Server shutting down")
     finally:
