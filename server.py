@@ -4,6 +4,7 @@ import json
 from protocol import frame_message, extract_messages
 
 client_list = {}
+client_locks = {}
 lock = threading.Lock()  # separate threads during the connection
 
 """_summary_
@@ -31,20 +32,27 @@ def handle_clients(conn, addr):
         # manually get the username from the data
         username_bytes, buffer = buffer.split(b'\n', 1)
         new_client = username_bytes.decode('utf-8')
-        
+
+
         with lock:
             if new_client in client_list:
                 # tell the client that this username is taken
                 registered = False
             else:
                 # the client is new; allow them in the server
+                send_lock = threading.Lock()
+                client_locks[new_client] = send_lock
+                send_lock.acquire()
                 client_list[new_client] = conn
                 registered = True
-                print(client_list)
+                #print(client_list)
 
         # tell the client if the server accepted them or not
         if registered:
-            conn.sendall(frame_message("REGISTERED"))
+            try:
+                conn.sendall(frame_message("REGISTERED"))
+            finally:
+                send_lock.release()
         else:
             conn.sendall(frame_message("USERNAME_TAKEN"))
             return
@@ -64,8 +72,46 @@ def handle_clients(conn, addr):
             messages, buffer = extract_messages(buffer)
 
             for message in messages:
-                message_info = json.loads(message.decode('utf-8'))  # get the client's message
+                try:
+                    message_info = json.loads(message.decode('utf-8'))  # get the client's message
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    with send_lock:
+                        conn.sendall(frame_message("Invalid message format."))
+                        continue
+                
+                # check to make sure the requested message from the client is an acceptable request
+                if not isinstance(message_info, dict):
+                    with send_lock:
+                        conn.sendall(frame_message("Message must be a JSON object."))
+                        continue
 
+                if "receiver" not in message_info or "message" not in message_info:
+                    with send_lock:
+                        conn.sendall(frame_message("Receiver and message fields are required."))
+                        continue
+
+                if not isinstance(message_info["receiver"], str):   
+                    with send_lock:
+                        conn.sendall(frame_message("Receiver must be a string."))
+                        continue
+
+                if not isinstance(message_info["message"], str):
+                    with send_lock:
+                        conn.sendall(frame_message("Message must be a string."))
+                        continue
+
+                if not message_info["receiver"].strip():
+                    with send_lock:
+                        conn.sendall(frame_message("Must provide a recipient."))
+                    continue
+
+                if not message_info["message"].strip():
+                    with send_lock:
+                        conn.sendall(frame_message("Must type a message."))
+                    continue
+
+
+                # client message request passed; send the message to the recipient
                 receiver = message_info["receiver"]
                 text = message_info["message"]
 
@@ -79,18 +125,22 @@ def handle_clients(conn, addr):
                 # get the client that's getting the message
                 with lock:
                     receiver_socket = client_list.get(receiver)
+                    receiver_lock = client_locks.get(receiver)
 
-                if receiver_socket is not None:
+                if receiver_socket is not None and receiver_lock is not None:
                     try:
-                        receiver_socket.sendall(forward_message) # sending the client's message to their recipient
+                        with receiver_lock:
+                            receiver_socket.sendall(forward_message) # sending the client's message to their recipient
 
                     except OSError as e:
                         print(f"Delivery failed: {e}")
-                        conn.sendall(
-                            frame_message(f"Failed to deliver message to '{receiver}'.")
-                        )
+                        with send_lock:
+                            conn.sendall(
+                                frame_message(f"Failed to deliver message to '{receiver}'.")
+                            )
                 else:
-                    conn.sendall(frame_message(f"User '{receiver}' is not connected to the server."))
+                    with send_lock:
+                        conn.sendall(frame_message(f"User '{receiver}' is not connected to the server."))
 
     except ConnectionResetError:
         print("Client disconnected unexpectedly")
@@ -101,10 +151,17 @@ def handle_clients(conn, addr):
     except socket.timeout:
         print("Connection timed out")
 
+    except OSError as e:
+        print(f"Unexpected socket error: {e}")
+
+    except UnicodeDecodeError:
+        print("Invalid UTF-8 data received during registration.")
+
     finally:
         with lock: # only take out the necessary client
             if client_list.get(new_client) is conn:
                 client_list.pop(new_client, None)
+                client_locks.pop(new_client, None)
         conn.close()
 
 
@@ -123,15 +180,27 @@ def server():
     # The socket is listening for connections
     server_socket.listen(5)
 
+    server_socket.settimeout(1.0)
+
     print(f"Server listening on {host}:{port}")
 
     try:
         while True:
-            conn, addr = server_socket.accept()
+            try:
+                conn, addr = server_socket.accept()
+            except socket.timeout:
+                continue
+
             # Let the server allow multiple clients
-            thread = threading.Thread(target=handle_clients, args=(conn, addr), daemon=True)
+            thread = threading.Thread(
+                target=handle_clients,
+                args=(conn, addr),
+                daemon=True
+            )
+
             thread.start()
             print(f"Active connections: {threading.active_count() - 1}")
+            
     except KeyboardInterrupt:
         print("Server shutting down")
     finally:

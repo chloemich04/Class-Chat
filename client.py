@@ -13,30 +13,55 @@ def client():
     username = input("Enter a username: ")  # the client will name itself
 
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # IPv4 TCP socket
-    client_socket.connect((host, port)) # connect to the server
+
+    try:
+        client_socket.connect((host, port)) # connect to the server
+    except ConnectionRefusedError:
+        print("Unable to connect. Please make sure the server is running.")
+        client_socket.close()
+        return
+    except OSError as e:
+        print(f"Unexpected socket error: {e}")
+        client_socket.close()
+        return
 
     buffer = b''
 
-    client_socket.sendall(frame_message(username))  # tell the server who the client is
+    try:
+        client_socket.sendall(frame_message(username))  # tell the server who the client is
 
-    while b'\n' not in buffer:
-        data = client_socket.recv(1024) # the server will tell if the client is registered or not
+        while b'\n' not in buffer:
+            data = client_socket.recv(1024) # the server will tell if the client is registered or not
 
-        if not data:
-            print("Server disconnected during registration.")
-            client_socket.close()
-            return
-        
-        buffer += data
+            if not data:
+                print("Server disconnected during registration.")
+                client_socket.close()
+                return
+            
+            buffer += data
 
-    # get the server's decision from the buffer
-    response_bytes, buffer = buffer.split(b'\n', 1)
-    response = response_bytes.decode('utf-8')
+        # get the server's decision from the buffer
+        response_bytes, buffer = buffer.split(b'\n', 1)
+        response = response_bytes.decode('utf-8')
+
+    except OSError as e:
+        print(f"Unexpected socket error: {e}")
+        client_socket.close()
+        return
+
+    except UnicodeDecodeError:
+        print("Invalid UTF-8 data received during registration.")
+        client_socket.close()
+        return
 
     if response == "REGISTERED":
         print(f"Welcome to Class Chat: {username}!") # the client is accepted 
-    else:
+    elif response == "USERNAME_TAKEN":
         print("Username already taken.") # the client is rejected; stop the client
+        client_socket.close()
+        return
+    else:
+        print(f"Unexpected registration response: {response}")
         client_socket.close()
         return
 
@@ -59,6 +84,12 @@ def client():
 
     try:
         receive_messages(client_socket, out_going, read_socket, stop_event, buffer)
+    except ConnectionResetError:
+        print("Connection to the server was unexpectedly lost.")
+    except OSError as e:
+        print(f"Unexpected socket error: {e}")
+    except KeyboardInterrupt:
+        print("\nDisconnecting from Class Chat...")
     finally:
         stop_event.set()
         read_socket.close()
@@ -68,13 +99,22 @@ def client():
 
 def send_messages(username, out_going, write_socket, stop_event):
     while not stop_event.is_set():
-        # Send a message
-        recipient = input("Who would you like to message: ")  # who are you texting
-            
-        text = input("What do you want to say -> ") # get input
+        try:
+            # Send a message
+            recipient = input("Who would you like to message: ")  # who are you texting
+                
+            text = input("What do you want to say -> ") # get client's message
+        except EOFError:
+            print("Input closed. Disconnecting...")
+            try:
+                write_socket.sendall(b'Q')
+            except OSError as e:
+                print(f"Unexpected socket error: {e}")
+                stop_event.set()
+            return
 
         if stop_event.is_set(): # if the client is disconnected, don't let the message go through
-            break
+            return
 
         # if the client types 'bye' they will be disconnected from 
         # the server; make sure the server is aware of it
@@ -84,14 +124,14 @@ def send_messages(username, out_going, write_socket, stop_event):
             except OSError:
                 stop_event.set()
             
-            break
-    
+            return
+
         text_info = {
             "sender": username,
             "receiver": recipient,
             "message": text
         }
-    
+
         json_info = json.dumps(text_info)
 
         # send the message to the queue
@@ -104,7 +144,7 @@ def send_messages(username, out_going, write_socket, stop_event):
         except OSError as e:
             print(f"Notification failed: {e}")
             stop_event.set()
-            break 
+            return 
 
 
 def receive_messages(client_socket,out_going, read_socket, stop_event, buffer):
@@ -137,7 +177,26 @@ def receive_messages(client_socket,out_going, read_socket, stop_event, buffer):
             # if the server sends something to the client, the name will be 'Server
             try:
                 message_info = json.loads(info)
+
+                # check to make sure the requested message from the client is an acceptable request
+                if not isinstance(message_info, dict):
+                        print("Message must be a JSON object.")
+                        continue
+
+                if "sender" not in message_info or "message" not in message_info:
+                    print("Sender and message fields are required.")
+                    continue
+
+                if not isinstance(message_info["sender"], str):   
+                    print("Received an invalid sender.")
+                    continue
+
+                if not isinstance(message_info["message"], str):
+                    print("Received an invalid message.")
+                    continue
+                
                 print(f"<{message_info["sender"]}>: {message_info["message"]}")
+
             except json.JSONDecodeError:
                 print(f"<Server>: {info}")
 
